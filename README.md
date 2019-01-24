@@ -8,6 +8,7 @@ deps:
 [
   {:bamboo, "~> 1.1"},
   {:comeonin, "~> 4.0"},
+  {:ex_machina, "~>2.2"},
   {:guardian, "~> 1.1"},
   {:hound, "~> 1.0", only: :test}
   {:pot, "~> 0.9.6"}
