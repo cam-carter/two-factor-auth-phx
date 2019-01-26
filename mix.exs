@@ -43,7 +43,9 @@ defmodule TwoFactorAuth.Mixfile do
       {:cowboy, "~> 1.0"},
       {:plug_cowboy, "~> 1.0"},
       {:bamboo, "~> 1.0"},
-      {:comeonin, "~> 4.0"},
+      {:bcrypt_elixir, "~> 1.1.1"},
+      {:comeonin, "~> 4.1"},
+      {:ex_machina, "~> 2.2", only: :test},
       {:guardian, "~> 1.1"},
       {:hound, "~> 1.0", only: :test},
       {:pot, "~> 0.9.6"}
