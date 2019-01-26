@@ -20,19 +20,20 @@ defmodule TwoFactorAuthWeb.ConnCase do
       # Import conveniences for testing with connections
       use Phoenix.ConnTest
       import TwoFactorAuthWeb.Router.Helpers
+      import TwoFactorAuth.Factory
 
       # The default endpoint for testing
       @endpoint TwoFactorAuthWeb.Endpoint
     end
   end
 
-
   setup tags do
     :ok = Ecto.Adapters.SQL.Sandbox.checkout(TwoFactorAuth.Repo)
+
     unless tags[:async] do
       Ecto.Adapters.SQL.Sandbox.mode(TwoFactorAuth.Repo, {:shared, self()})
     end
+
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
-
 end

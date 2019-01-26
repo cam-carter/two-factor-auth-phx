@@ -4,7 +4,8 @@ use Mix.Config
 # you can enable the server option below.
 config :two_factor_auth, TwoFactorAuthWeb.Endpoint,
   http: [port: 4001],
-  server: false
+  url: [host: "localhost", port: 80],
+  server: true
 
 # Print only warnings and errors during test
 config :logger, level: :warn
@@ -17,3 +18,6 @@ config :two_factor_auth, TwoFactorAuth.Repo,
   database: "two_factor_auth_test",
   hostname: "localhost",
   pool: Ecto.Adapters.SQL.Sandbox
+
+config :hound,
+  driver: "chrome_driver"

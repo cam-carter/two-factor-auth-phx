@@ -22,6 +22,7 @@ defmodule TwoFactorAuth.DataCase do
       import Ecto.Changeset
       import Ecto.Query
       import TwoFactorAuth.DataCase
+      import TwoFactorAuth.Factory
     end
   end
 
