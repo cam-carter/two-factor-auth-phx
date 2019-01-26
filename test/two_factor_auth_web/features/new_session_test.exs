@@ -1,14 +1,14 @@
-defmodule TwoFactorAuthWeb.Session.NewTest do
+defmodule TwoFactorAuthWeb.NewSessionTest do
   use TwoFactorAuth.FeatureCase
 
-  alias TwoFactorAuth.IndexPage
-  alias TwoFactorAuth.{NewSessionPage, TwoFactorAuthPage}
+  alias TwoFactorAuth.{IndexPage, NewSessionPage, TwoFactorAuthPage}
 
   hound_session()
 
   setup do
     # Our factory inserts this user into the database
     user = insert(:user, password: "password")
+    user_with_2fa = insert(:user, has_2fa: true)
 
     {:ok, %{user: user}}
   end
@@ -29,5 +29,14 @@ defmodule TwoFactorAuthWeb.Session.NewTest do
 
     refute IndexPage.is_current_path?()
     assert NewSessionPage.has_text?("Invalid email or password!")
+  end
+
+  test "user with two factor authentication is redirected", %{user_with_2fa: user} do
+    NewSessionPage.visit()
+    NewSessionPage.enter_credentials(user.email, "password")
+    NewSessionPage.submit()
+
+    assert TwoFactorAuthPage.is_current_path?()
+    assert TwoFactorAuthPage.has_text?("An email was sent to you with a code to log in.")
   end
 end

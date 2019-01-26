@@ -4,6 +4,7 @@ defmodule TwoFactorAuth.Accounts.User do
 
   schema "users" do
     field(:email, :string)
+    field(:has_2fa, :boolean, default: false)
     field(:password_hash, :string)
     field(:password, :string, virtual: true)
 
