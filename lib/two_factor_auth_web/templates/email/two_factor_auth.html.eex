@@ -1,0 +1,1 @@
+<p>Here's your two-factor authentication code: <%= @one_time_pass %></p>

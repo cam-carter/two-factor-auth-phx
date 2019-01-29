@@ -12,9 +12,9 @@ defmodule TwoFactorAuth.Accounts.User do
   end
 
   @doc false
-  def changeset(user, attrs) do
+  def changeset(%__MODULE__{} = user, attrs) do
     user
-    |> cast(attrs, [:email, :password])
+    |> cast(attrs, [:email, :password, :has_2fa])
     |> validate_required([:email, :password])
     |> downcase_email()
     |> unique_constraint(:email)
