@@ -4,7 +4,7 @@ defmodule TwoFactorAuthWeb.Plugs.Auth do
 
   alias TwoFactorAuth.Accounts.User
 
-  def generate_one_time_pass(user = %User{has_2fa: true}) do
+  def generate_one_time_pass() do
     token =
       :crypto.strong_rand_bytes(8)
       |> Base.encode32()
@@ -25,9 +25,9 @@ defmodule TwoFactorAuthWeb.Plugs.Auth do
 
   def fetch_secret_from_session(conn) do
     %{"token" => token, "user_id" => user_id} =
-      Kernel.get_in(conn.private, [:plug_session, "user_secret"])
+      conn.private[:plug_session]
+      |> Map.get("user_secret")
 
-    IO.inspect(token, label: "Token after fetch --------------->")
     {token, user_id}
   end
 
@@ -38,10 +38,10 @@ defmodule TwoFactorAuthWeb.Plugs.Auth do
     end
   end
 
-  def invalidate_one_time_pass(conn, user_id) do
+  def invalidate_token(conn, user_id) do
     updated_plug_session =
       conn.private[:plug_session]
-      |> Map.put("user_secret", %{"token" => nil, "user_id" => user_id})
+      |> Map.drop("user_secret")
 
     conn
     |> put_private(:plug_session, updated_plug_session)

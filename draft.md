@@ -16,8 +16,7 @@ Here's the list of dependencies I'm using. You can just throw this in your `mix.
 defp deps do
   [
     {:bamboo, "~> 1.0"},
-    {:ex_machina, "~> 2.2", only: test},
-    {:hound, "~> 1.0", only: test},
+    {:guardian, "~> 1.1"},
     {:pot, "~> 0.9.6"}
   ]
 end
@@ -82,7 +81,7 @@ And to great success we now have `:has_2fa` attached to our users! This flag is 
 
 We need a place to go to render our form for 2fa and when we're there we need a way to send our code to the controller for examination and verification.
 
-```
+```elixir
 get("/sessions/new/two_factor_auth", TwoFactorAuthController, :new)
 post("/sessions/new/two_factor_auth", TwoFactorAuthController, :create)
 ```
@@ -135,7 +134,7 @@ defmodule TwoFactorAuthWeb.SessionController do
 end
 ```
 
-I know you probably dieing to see those abstracted functions that generate the one time password and assign the token to the session, but you'll have to wait. Firstly we need to checkout the two-factor auth controller, and then I'll show off the goods.
+I know you're probably dieing to see those abstracted functions that generate the one time password and assign the token to the session, but you'll have to wait. First we need to checkout the two-factor auth controller, and then I'll show off the goods.
 
 ```elixir
 defmodule TwoFactorAuthWeb.TwoFactorAuthController do
@@ -147,6 +146,8 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
   alias TwoFactorAuthWeb.Plugs.Auth
 
   def new(conn, _) do
+    # we want to see if our token is empty, and if it is we redirect them back to the new session page
+    # the goal here is to have one continuous session through the flow of 2fa
     with {token, _user_id} when not is_nil(token) <- Auth.fetch_secret_from_session(conn) do
       conn
       |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
@@ -160,13 +161,18 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
   end
 
   def create(conn, %{"one_time_pass" => one_time_pass}) do
+    # to verify the one_time_pass that comes in through the form we need the secret token off the conn
+    # we also need the user_id to know who we're building the session for
     {token, user_id} = Auth.fetch_secret_from_session(conn)
     user = Accounts.get_user!(user_id)
 
     case Auth.valid_one_time_pass?(one_time_pass, token) do
       true ->
         conn
-        |> Auth.invalidate_one_time_pass(user_id)
+        # our one time password can only be used once, duh
+        # but we wanna go that extra mile and also invalidate our token
+        # just in case?
+        |> Auth.invalidate_secret(user_id)
         |> Guardian.Plug.sign_in(user)
         |> put_flash(:info, "Login successful!")
         |> put_status(302)
@@ -181,3 +187,151 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
   end
 end
 ```
+
+## The legend of Plug.Conn
+
+Now let's take a look at `auth.ex`. This is our plug module that holds all that fancy `hotp` functionality we saw earlier. There's a couple challenges when it comes to dealing with the second factor of our authentication workflow. We need to be able to assure that there is one continuous session throughout the entire process, meaning that we can't take any requests from a user that hasn't first logged in with their username and password. We also need to be sure no sensitive data, i.e. our secret token, is being leaked to the user. That's where the function `put_private` comes in, but even nice things come with stipulations.
+
+`put_private` is a function that comes from `Plug.Conn`. To quote the doumentation:
+
+```
+Assigns a new private key and value in the connection.
+
+This storage is meant to be used by libraries and frameworks to avoid writing to the user storage (the :assigns field). It is recommended for libraries/frameworks to prefix the keys with the library name.
+```
+
+So inside of our `conn` lives a special `:private` map that keeps our deep, dark secrets about the session from the user instead of leaking this information through `conn[:assigns]`. The key takeaway here is that the storage "is meant to be used by libraries and frameworks". Let's take a look at how this might work with the secret sauce of our one time password validation.
+
+```elixir
+def assign_secret_to_session(conn, token, user_id) do
+  conn
+  |> put_private(:user_secret, %{token: token, user_id: user_id})
+end
+```
+
+The functionality of `put_private` looks just like `Map.put`. We take a map, then a key, and then a value to put under that key. Now lets get that secret out of our conn, so we can put those values to good use.
+
+```elixir
+def fetch_secret_from_session(conn) do
+  %{token: token, user_id: user_id} = conn.private[:user_id]
+
+  {token, user_id}
+end
+```
+
+You'd expect this to work, right? Well think think again! We just got a nasty `MatchError`. When we try to fetch that secret after our `conn` is redirected from our session create to the two factor auth new path, that `:user_secret` key is gone. Now if I'm being honest with you, I really don't have a clue why this is happening. But, if we go back and look at the documentation, we can read into a little more:
+
+```
+This storage is meant to be used by libraries and frameworks to avoid writing to the user storage (the :assigns field). It is recommended for libraries/frameworks to prefix the keys with the library name.
+```
+
+So is our `:user_secret` being dropped because it's not a library? Let's take a look at conn[:private] and try something different.
+
+```elixir
+%Plud.Conn{
+  private: %{
+    TwoFactorAuthWeb.Router => {[],
+    :phoenix_action => :new,
+    :phoenix_controller => TwoFactorAuthWeb.TwoFactorAuthController,
+    :phoenix_endpoint => TwoFactorAuthWeb.Endpoint,
+    :phoenix_flash => %{
+      "info" => "A two-factor authentication code has been sent to your email!"
+    },
+    :phoenix_format => "html",
+    :phoenix_layout => {TwoFactorAuthWeb.LayoutView, :app},
+    :phoenix_pipelines => [:browser],
+    :phoenix_router => TwoFactorAuthWeb.Router,
+    :phoenix_view => TwoFactorAuthWeb.TwoFactorAuthView,
+    :plug_session => %{
+      "_csrf_token" => "MXbH2CPKOEs5iMltrA38ZQ==",
+      "guardian_default_token" => "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0d29fZmFjdG9yX2F1dGgiLCJleHAiOjE1NTExMzE1NDMsImlhdCI6MTU0ODcxMjM0MywiaXNzIjoidHdvX2ZhY3Rvcl9hdXRoIiwianRpIjoiYmMyMzUyZDktODk1Yi00N2ZiLTkzMWItNWNlY2I2OTcwMjMzIiwibmJmIjoxNTQ4NzEyMzQyLCJzdWIiOiIxIiwidHlwIjoiYWNjZXNzIn0.5rFnDhFhB28LxksKqt_sc0ZfgYv-QbuTX5PLFKJkgi7J4NzxKt5N-PphQT2Z39uMWbp3V2p22Fz1Yz3pqisfWw",
+      "phoenix_flash" => %{
+        "info" => "A two-factor authentication code has been sent to your email!"
+      }
+  }
+}
+```
+
+Notice these keys, besides our router, are all dependencies for our Phoenix application. So let's try this again but nest our `:user_secret` map inside of an applicable place in `:private`.
+
+```elixir
+defmodule TwoFactorAuthWeb.Plugs.Auth do
+  use TwoFactorAuthWeb, :controller
+  import Plug.Conn
+
+  alias TwoFactorAuth.Accounts.User
+
+  def generate_one_time_pass() do
+    token =
+      :crypto.strong_rand_bytes(8)
+      |> Base.encode32()
+
+    one_time_pass = :pot.hotp(token, _number_of_trials = 1)
+
+    {token, one_time_pass}
+  end
+
+  def assign_secret_to_session(conn, token, user_id) do
+    updated_plug_session =
+      conn.private[:plug_session]
+      |> Map.put("user_secret", %{"token" => token, "user_id" => user_id})
+
+    conn
+    |> put_private(:plug_session, updated_plug_session)
+  end
+
+  def fetch_secret_from_session(conn) do
+    %{"token" => token, "user_id" => user_id} =
+      conn.private[:plug_session]
+      |> Map.get("user_id")
+
+    {token, user_id}
+  end
+
+  def valid_one_time_pass?(one_time_pass, token) do
+    case :pot.valid_hotp(one_time_pass, token, [{:last, 0}]) do
+      1 -> true
+      _ -> false
+    end
+  end
+
+  def invalidate_token(conn, user_id) do
+    updated_plug_session =
+      conn.private[:plug_session]
+      |> Map.drop("user_secret")
+
+    conn
+    |> put_private(:plug_session, updated_plug_session)
+  end
+end
+```
+
+So if we latch our `:user_secret` onto `:plug_session`, the `conn` keeps state after the redirect.
+
+```
+private: %{
+    TwoFactorAuthWeb.Router => {[],
+    :phoenix_action => :new,
+    :phoenix_controller => TwoFactorAuthWeb.TwoFactorAuthController,
+    :phoenix_endpoint => TwoFactorAuthWeb.Endpoint,
+    :phoenix_flash => %{
+      "info" => "A two-factor authentication code has been sent to your email!"
+    },
+    :phoenix_format => "html",
+    :phoenix_layout => {TwoFactorAuthWeb.LayoutView, :app},
+    :phoenix_pipelines => [:browser],
+    :phoenix_router => TwoFactorAuthWeb.Router,
+    :phoenix_view => TwoFactorAuthWeb.TwoFactorAuthView,
+    :plug_session => %{
+      "_csrf_token" => "MXbH2CPKOEs5iMltrA38ZQ==",
+      "guardian_default_token" => "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0d29fZmFjdG9yX2F1dGgiLCJleHAiOjE1NTExMzE1NDMsImlhdCI6MTU0ODcxMjM0MywiaXNzIjoidHdvX2ZhY3Rvcl9hdXRoIiwianRpIjoiYmMyMzUyZDktODk1Yi00N2ZiLTkzMWItNWNlY2I2OTcwMjMzIiwibmJmIjoxNTQ4NzEyMzQyLCJzdWIiOiIxIiwidHlwIjoiYWNjZXNzIn0.5rFnDhFhB28LxksKqt_sc0ZfgYv-QbuTX5PLFKJkgi7J4NzxKt5N-PphQT2Z39uMWbp3V2p22Fz1Yz3pqisfWw",
+      "phoenix_flash" => %{
+        "info" => "A two-factor authentication code has been sent to your email!"
+      },
+      "user_secret" => %{"token" => "TBPUPSS55IC7C===", "user_id" => 1} # <- ding! ding! ding!
+    },
+    :plug_session_fetch => :done
+  }
+```
+
+And finally, after some weirdness, we have our secret token that we need to validate the user's one time password!

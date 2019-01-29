@@ -30,7 +30,7 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
     case Auth.valid_one_time_pass?(one_time_pass, token) do
       true ->
         conn
-        |> Auth.invalidate_one_time_pass(user_id)
+        |> Auth.invalidate_token(user_id)
         |> Guardian.Plug.sign_in(user)
         |> put_flash(:info, "Login successful!")
         |> put_status(302)

@@ -15,7 +15,7 @@ defmodule TwoFactorAuthWeb.SessionController do
     with {:ok, user} <- Accounts.verify_login(session_params) do
       case user.has_2fa do
         true ->
-          {token, one_time_pass} = Auth.generate_one_time_pass(user)
+          {token, one_time_pass} = Auth.generate_one_time_pass()
           Mailer.deliver_2fa_email(user, one_time_pass)
 
           conn
