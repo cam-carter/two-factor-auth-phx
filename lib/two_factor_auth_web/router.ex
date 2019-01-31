@@ -26,6 +26,7 @@ defmodule TwoFactorAuthWeb.Router do
     post("/sessions", SessionController, :create)
     get("/sessions/new/two_factor_auth", TwoFactorAuthController, :new)
     post("/sessions/new/two_factor_auth", TwoFactorAuthController, :create)
+    post("/sessions/new/two_factor_auth/resend_email", TwoFactorAuthController, :resend_email)
 
     pipe_through(:authenticated)
 

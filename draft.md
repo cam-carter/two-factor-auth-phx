@@ -37,11 +37,11 @@ token =
 one_time_pass = :pot.hotp(token, _number_of_trials = 1)
 ```
 
-This code is going to come in handy later, so we'll want to hold on to it. We're creating a token with the `:crypto` application which provides an API to cryptographic functions in Erlang. The we're using that token to generate a one time password that can only be used -- well -- once.
+This code is going to come in handy later, so we'll want to hold on to it. We're creating a token with the `:crypto` application which provides an API to cryptographic functions in Erlang. Then we're using that token to generate a one time password that can only be used... You, guessed it: once.
 
 ## Add a flag to the User? Add a flag to the User.
 
-To get things poppin' off we're gonna wanna add a boolean flag to our `User` schema module and `:users` tabel. We can do that by generating a new Ecto migration.
+To get things poppin' off we're going to want to add a boolean flag to our `User` schema module and `:users` tabel. We can do that by generating a new Ecto migration.
 
 ```
 mix ecto.gen.migration add_has_2fa_to_users
@@ -69,7 +69,7 @@ schema "users" do
 end
 ```
 
-The we'll run our new, fancy migration.
+Then we'll run our new, fancy migration.
 
 ```
 mix ecto.migrate
@@ -77,18 +77,34 @@ mix ecto.migrate
 
 And to great success we now have `:has_2fa` attached to our users! This flag is going to tell us which users to send a one time password to and which ones to just let slide through with only one piece of authentic evidence. (Note: two factor authentication won't protect anything if your password for both the system and your email are just `password`)
 
-## We're gonna need a new some new routes
+## We're gonna need some new routes
 
-We need a place to go to render our form for 2fa and when we're there we need a way to send our code to the controller for examination and verification.
+We need a place to go to render our form for 2fa and when we're there we need a way for our user to send their one time password to the controller for examination and verification.
 
 ```elixir
+### lib/two_factor_auth_web/router.ex ###
+
 get("/sessions/new/two_factor_auth", TwoFactorAuthController, :new)
 post("/sessions/new/two_factor_auth", TwoFactorAuthController, :create)
 ```
 
+And the corresponding form:
+
+```elixir
+### lib/two_factor_auth_web/templates/two_factor_auth/two_factor_auth.html.eex ###
+
+<%= form_for @conn, two_factor_auth_path(@conn, :create), fn f -> %>
+  <label>
+    Code: <%= text_input f, :one_time_pass, class: "qa-one_time_pass" %>
+  </label>
+
+  <%= submit "Submit", class: "qa-submit" %>
+<% end %>
+```
+
 ## And now the all-powerfull controllers
 
-Before we can get to the meat and potatoes of two-factor authentication, we need to take a gander at our session controller and using that shiny, new boolean on our users, make sure we're sending people to their appropriate destinations.
+Before we can get to the meat and potatoes of two-factor authentication, we need to take a gander at our session controller and, using that shiny, new boolean on our users, make sure we're sending people to their appropriate destinations.
 
 ```elixir
 defmodule TwoFactorAuthWeb.SessionController do
@@ -113,28 +129,28 @@ defmodule TwoFactorAuthWeb.SessionController do
 
           conn
           |> Auth.assign_secret_to_session(token, user.id) # the weirdest part about all this
-          |> put_flash(:info, "A heckin' 2fa code has been send to you! Isn't that cool?")
+          |> put_flash(:info, "A heckin' 2fa code has been sent to you! Isn't that cool?")
           |> put_status(302)
           |> redirect(to: two_factor_auth_path(conn, :new))
 
         false ->
           conn
           |> Guardian.Plug.sign_in(user)
-          |> put_flash(:info, "Login successful!")
+          |> put_flash(:info, "Login successful! But you should enable two-factor auth ngl")
           |> put_status(302)
           |> redirect(to: page_path(conn, :index))
       end
     else
-      {:error, msg} ->
+      {:error, _} ->
         conn
-        |> put_flash(:error, msg)
+        |> put_flash(:error, "You entered an invalid password or email!")
         |> put_status(401)
         |> render("new.html")
   end
 end
 ```
 
-I know you're probably dieing to see those abstracted functions that generate the one time password and assign the token to the session, but you'll have to wait. First we need to checkout the two-factor auth controller, and then I'll show off the goods.
+I know you're probably dieing to see those abstracted functions that generate the one time password and assign the token to the session, but you'll have to wait. First, we need to checkout the two-factor auth controller, and then I'll show off the goods.
 
 ```elixir
 defmodule TwoFactorAuthWeb.TwoFactorAuthController do
@@ -172,7 +188,7 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
         # our one time password can only be used once, duh
         # but we wanna go that extra mile and also invalidate our token
         # just in case?
-        |> Auth.invalidate_secret(user_id)
+        |> Auth.invalidate_secret()
         |> Guardian.Plug.sign_in(user)
         |> put_flash(:info, "Login successful!")
         |> put_status(302)
@@ -295,7 +311,7 @@ defmodule TwoFactorAuthWeb.Plugs.Auth do
     end
   end
 
-  def invalidate_token(conn, user_id) do
+  def invalidate_secret(conn) do
     updated_plug_session =
       conn.private[:plug_session]
       |> Map.drop("user_secret")
@@ -335,3 +351,31 @@ private: %{
 ```
 
 And finally, after some weirdness, we have our secret token that we need to validate the user's one time password!
+
+## The cherry on top
+
+So what if our user doesn't recieve the email? Maybe some shark was nibbling on some transatlantic communications cable and something went wrong? Well, we could give our user the option to resend their email. We'd just need a new route and some extra goodies in the controller to generate another one time password and token.
+
+```elixir
+### liv/two_factor_auth_web/router.ex ###
+
+post("/sessions/new/two_factor_auth/resend_email", TwoFactorAuthController, :resend_email)
+```
+
+```elixir
+### lib/two_factor_auth_web/controllers/two_factor_auth_controller.ex ###
+
+def resend_email(conn, _) do
+  {_old_token, user_id} = Auth.fetch_secret_from_session(conn)
+  user = Accounts.get_user!(user_id)
+
+  {new_token, one_time_pass} = Auth.generate_one_time_pass()
+  Mailer.deliver_2fa_email(user, one_time_pass)
+
+  conn
+  |> Auth.assign_secret_to_session(token, user_id)
+  |> put_flash(:info, "A new two-factor authentication code was sent to your email!")
+  |> put_status(200)
+  |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
+end
+```

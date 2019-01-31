@@ -24,11 +24,16 @@ defmodule TwoFactorAuthWeb.Plugs.Auth do
   end
 
   def fetch_secret_from_session(conn) do
-    %{"token" => token, "user_id" => user_id} =
-      conn.private[:plug_session]
-      |> Map.get("user_secret")
+    try do
+      %{"token" => token, "user_id" => user_id} =
+        conn.private[:plug_session]
+        |> Map.get("user_secret")
 
-    {token, user_id}
+      {token, user_id}
+    rescue
+      MatchError ->
+        nil
+    end
   end
 
   def valid_one_time_pass?(one_time_pass, token) do
@@ -38,10 +43,10 @@ defmodule TwoFactorAuthWeb.Plugs.Auth do
     end
   end
 
-  def invalidate_token(conn, user_id) do
+  def invalidate_secret(conn) do
     updated_plug_session =
       conn.private[:plug_session]
-      |> Map.drop("user_secret")
+      |> Map.drop(["user_secret"])
 
     conn
     |> put_private(:plug_session, updated_plug_session)

@@ -12,10 +12,14 @@ defmodule TwoFactorAuth.TwoFactorAuthPage do
   end
 
   def enter_credentials(one_time_pass) do
-    fill_field({:css, "qa-2fa-one_time_pass"}, one_time_pass)
+    fill_field({:css, "qa-one_time_pass"}, one_time_pass)
   end
 
   def submit do
-    click({:css, ".qa-2fa-submit"})
+    click({:css, ".qa-submit"})
+  end
+
+  def resend_email do
+    click({:css, ".qa-resend-email"})
   end
 end

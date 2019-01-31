@@ -4,12 +4,14 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
 
   alias TwoFactorAuth.Guardian
   alias TwoFactorAuth.Accounts
+  alias TwoFactorAuthWeb.Mailer
   alias TwoFactorAuthWeb.Plugs.Auth
 
   def new(conn, _) do
     # we want to see if our token is nil, and if it is we redirect them back to the new session page
     # the goal here is to have one continuous session through the flow of 2fa
-    with {token, _user_id} when not is_nil(token) <- Auth.fetch_secret_from_session(conn) do
+    with {token, _user_id} = secret when not is_nil(secret) <-
+           Auth.fetch_secret_from_session(conn) do
       conn
       |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
     else
@@ -30,7 +32,7 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
     case Auth.valid_one_time_pass?(one_time_pass, token) do
       true ->
         conn
-        |> Auth.invalidate_token(user_id)
+        |> Auth.invalidate_secret()
         |> Guardian.Plug.sign_in(user)
         |> put_flash(:info, "Login successful!")
         |> put_status(302)
@@ -42,5 +44,19 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
         |> put_status(401)
         |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
     end
+  end
+
+  def resend_email(conn, _) do
+    {_old_token, user_id} = Auth.fetch_secret_from_session(conn)
+    user = Accounts.get_user!(user_id)
+
+    {new_token, one_time_pass} = Auth.generate_one_time_pass()
+    Mailer.deliver_2fa_email(user, one_time_pass)
+
+    conn
+    |> Auth.assign_secret_to_session(new_token, user_id)
+    |> put_flash(:info, "A new two-factor authentication code was sent to your email!")
+    |> put_status(200)
+    |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
   end
 end

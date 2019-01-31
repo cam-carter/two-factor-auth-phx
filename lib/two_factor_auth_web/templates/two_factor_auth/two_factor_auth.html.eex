@@ -5,3 +5,5 @@
 
   <%= submit "Submit", class: "qa-submit" %>
 <% end %>
+
+<%= link "Resend two-factor authetication code", to: two_factor_auth_path(@conn, :resend_email), method: :post, class: "qa-resend-email" %>
