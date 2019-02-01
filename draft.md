@@ -164,7 +164,7 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
   def new(conn, _) do
     # we want to see if our token is empty, and if it is we redirect them back to the new session page
     # the goal here is to have one continuous session through the flow of 2fa
-    with {token, _user_id} when not is_nil(token) <- Auth.fetch_secret_from_session(conn) do
+    with {token, _user_id} <- Auth.fetch_secret_from_session(conn) do
       conn
       |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
     else
@@ -268,7 +268,9 @@ So is our `:user_secret` being dropped because it's not a library? Let's take a 
 }
 ```
 
-Notice these keys, besides our router, are all dependencies for our Phoenix application. So let's try this again but nest our `:user_secret` map inside of an applicable place in `:private`.
+## A plug for our Plug
+
+Notice the keys returned from looking at the `conn[:private]`, besides our router, are all dependencies for our Phoenix application. So let's try this again but nest our `:user_secret` map inside of an applicable place in `:private`.
 
 ```elixir
 defmodule TwoFactorAuthWeb.Plugs.Auth do
@@ -296,14 +298,27 @@ defmodule TwoFactorAuthWeb.Plugs.Auth do
     |> put_private(:plug_session, updated_plug_session)
   end
 
+  # I know this funciton looks a little wonky, but if that user_secret key doesn't exist
+  # we'll get a MatchError. And, we certainly don't want that.
+  # This specifically comes into play when we're visiting our new path
+  # in the TwoFactorAuthController.
   def fetch_secret_from_session(conn) do
-    %{"token" => token, "user_id" => user_id} =
-      conn.private[:plug_session]
-      |> Map.get("user_id")
+    try do
+      %{"token" => token, "user_id" => user_id} =
+        conn.private[:plug_session]
+        |> Map.get("user_id")
 
-    {token, user_id}
+      {token, user_id}
+    rescue
+      MatchError ->
+        nil
+    end
   end
 
+  # When you check the validity of an HMAC one time password, since it's trial-based,
+  # it returns the current number of trials on the password when it is valid. Otherwise
+  # it returns false. When we generated our password we only allowed for 1 trial, so
+  # anything over that will now count as invalid or false.
   def valid_one_time_pass?(one_time_pass, token) do
     case :pot.valid_hotp(one_time_pass, token, [{:last, 0}]) do
       1 -> true
@@ -322,7 +337,30 @@ defmodule TwoFactorAuthWeb.Plugs.Auth do
 end
 ```
 
-So if we latch our `:user_secret` onto `:plug_session`, the `conn` keeps state after the redirect.
+There's a lot going on in this file, so let me try to explain my reasoning behind a couple of these functions. Notice `assign_secret_to_session/3`; we end up putting our `:user_secret` (now the stringified key `"user_secret"`) inside of `:plug_session`. Why? Well it seemed like the aforementioned _applicable_ place. Considering that we wanted to continue the private data on our connection's current session, I thought it best to stash the goods inside of there. So if we latch our `"user_secret"` onto `:plug_session`, `conn[:private]` keeps it there after the redirect.
+
+Another weird thing you might notice is that `try ... rescue ...` block in `fetch_secret_from_session/1`. Well this comes in to play in our `two_factor_auth_controller` on the new path. For reference here's that function again:
+
+```elixir
+### lib/two_factor_auth_web/controllers/two_factor_auth_controller.ex ###
+
+def new(conn, _) do
+  with {token, _user_id} <- Auth.fetch_secret_from_session(conn) do
+    conn
+    |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
+  else
+  _ ->
+    conn
+    |> put_flash(:error, "Page not found")
+    |> put_status(404)
+    |> redirect(to: session_path(conn, :new))
+  end
+end
+```
+
+So without catching the `MatchError`, our application would have failed when we tried to call `fetch_secret_from_session/1` on a conn that didn't have a token. Now if the the `"user_secret"` key doesn't exist our `with` fails and takes us to the `else` clause where we can give our user a 404.
+
+Another strange caveat 
 
 ```
 private: %{

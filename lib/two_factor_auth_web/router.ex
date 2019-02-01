@@ -21,8 +21,8 @@ defmodule TwoFactorAuthWeb.Router do
     # Use the default browser stack
     pipe_through(:browser)
 
-    get("/", SessionController, :new)
     get("/sessions/new", SessionController, :new)
+    get("/", SessionController, :new)
     post("/sessions", SessionController, :create)
     get("/sessions/new/two_factor_auth", TwoFactorAuthController, :new)
     post("/sessions/new/two_factor_auth", TwoFactorAuthController, :create)

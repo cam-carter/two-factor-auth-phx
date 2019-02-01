@@ -10,8 +10,7 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
   def new(conn, _) do
     # we want to see if our token is nil, and if it is we redirect them back to the new session page
     # the goal here is to have one continuous session through the flow of 2fa
-    with {token, _user_id} = secret when not is_nil(secret) <-
-           Auth.fetch_secret_from_session(conn) do
+    with {token, _user_id} <- Auth.fetch_secret_from_session(conn) do
       conn
       |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
     else

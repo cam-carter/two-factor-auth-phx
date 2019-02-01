@@ -21,13 +21,13 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthControllerTest do
     assert html_response(response, 200) =~ "/sessions/new/two_factor_auth"
   end
 
-  test "visiting the two factor auth page with no token", %{conn: conn, user: user} do
+  test "visiting the two factor auth page with no token", %{conn: conn} do
     response =
       conn
       |> Auth.invalidate_secret()
       |> get("/sessions/new/two_factor_auth")
 
-    assert html_response(response, 302) =~ "/sessions/new"
+    assert html_response(response, 404) =~ "/sessions/new"
   end
 
   test "submitting a session with a valid one time password", %{

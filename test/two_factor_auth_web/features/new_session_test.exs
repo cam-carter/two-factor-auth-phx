@@ -37,7 +37,10 @@ defmodule TwoFactorAuthWeb.NewSessionTest do
     NewSessionPage.submit()
 
     assert TwoFactorAuthPage.is_current_path?()
-    assert TwoFactorAuthPage.has_text?("An email was sent to you with a code to log in.")
+
+    assert TwoFactorAuthPage.has_text?(
+             "A two-factor authentication code has been sent to your email!"
+           )
   end
 
   test "user can resend two factor auth code", %{user_with_2fa: user} do
@@ -47,6 +50,9 @@ defmodule TwoFactorAuthWeb.NewSessionTest do
 
     assert TwoFactorAuthPage.is_current_path?()
     TwoFactorAuthPage.resend_email()
-    assert TwoFactorAuthPage.has_text?("A new two-factor authentication was sent to your email!")
+
+    assert TwoFactorAuthPage.has_text?(
+             "A new two-factor authentication code was sent to your email!"
+           )
   end
 end

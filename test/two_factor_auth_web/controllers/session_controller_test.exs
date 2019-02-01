@@ -17,7 +17,7 @@ defmodule TwoFactorAuthWeb.SessionControllerTest do
   test "logging in with valid credentials", %{conn: conn, user: user} do
     response = post(conn, "/sessions", %{email: user.email, password: "password"})
 
-    assert html_response(response, 302) =~ "Login successful!"
+    assert html_response(response, 302) =~ "/index"
   end
 
   test "logging in with invalid credentials", %{conn: conn, user: user} do

@@ -24,14 +24,15 @@ defmodule TwoFactorAuthWeb.Plugs.Auth do
   end
 
   def fetch_secret_from_session(conn) do
-    try do
-      %{"token" => token, "user_id" => user_id} =
-        conn.private[:plug_session]
-        |> Map.get("user_secret")
+    secret =
+      conn.private[:plug_session]
+      |> Map.get_lazy("user_secret", fn -> nil end)
 
-      {token, user_id}
-    rescue
-      MatchError ->
+    case secret do
+      %{"token" => token, "user_id" => user_id} ->
+        {token, user_id}
+
+      _ ->
         nil
     end
   end
