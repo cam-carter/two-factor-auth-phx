@@ -183,13 +183,13 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
     %{"token" => token, "user_id" => user_id} = get_session(conn)
     user = Accounts.get_user!(user_id)
 
-    case Auth.valid_one_time_pass?(one_time_pass, token) do
+    case Accounts.valid_one_time_pass?(one_time_pass, token) do
       true ->
         conn
-        # our one time password can only be used once, duh
-        # but we wanna go that extra mile and also invalidate our token
+        # our one time password can only be used... once
+        # but we wanna go that extra mile and also invalidate drop user_secret
         # just in case?
-        |> Auth.invalidate_secret()
+        |> delete_session("user_secret")
         |> Guardian.Plug.sign_in(user)
         |> put_flash(:info, "Login successful!")
         |> put_status(302)
@@ -209,7 +209,7 @@ end
 
 There's a couple challenges when it comes to dealing with the second factor of our authentication workflow. We need to be able to assure that there is one continuous session throughout the entire process, meaning that we can't take any requests from a user that hasn't first logged in with their username and password. We also need to be sure no sensitive data, i.e. our secret token, is being leaked to the user.
 
-That's where `:plug_session` comes in. This is the session store on our `conn` that get's encrypted when it's sent to the client and is stored by your browser as a cookie. We'll need to use `put_session/3` and `get_session/2` from `Plug.Conn` to assign and fetch our `"user_secret"` to and from the session.
+That's where `:plug_session` comes in. This is the session store in `conn[:private]` that get's encrypted when it's sent to the client and is stored by your browser as a cookie. We'll need to use `put_session/3` and `get_session/2` from `Plug.Conn` to assign and fetch our `"user_secret"` to and from the session.
 
 ```elixir
 ### from Plug.Conn (conn.ex) ###
@@ -232,7 +232,32 @@ end
 
 `conn[:private]` is meant to be used by libraries and frameworks, such as `Plug.Conn`, to avoid writing to the user storage (the `:assigns` field).
 
-So inside of our `conn` lives a special `:private` map that keeps our deep, dark secrets about the session from the user instead of leaking this information through `conn[:assigns]`. It's meant to be used by libraries, such as `Plug.Conn`, to avoid writing to `:assigns`.
+So inside of our `conn` lives a special `:private` map that keeps our deep, dark secrets about the session from the user instead of leaking this information through `conn[:assigns]`. It's meant to be used by libraries, such as `Plug.Conn`, to avoid writing to `:assigns`. Take a gander:
+
+```elixir
+%Plug.Conn{
+  private: %{
+    :phoenix_action => :new,
+    :phoenix_controller => TwoFactorAuthWeb.TwoFactorAuthController,
+    :phoenix_endpoint => TwoFactorAuthWeb.Endpoint,
+    :phoenix_flash => %{
+      "info" => "A two-factor authentication code has been sent to your email!"
+    },
+    :phoenix_format => "html",
+    :phoenix_layout => {TwoFactorAuthWeb.LayoutView, :app},
+    :phoenix_pipelines => [:browser],
+    :phoenix_router => TwoFactorAuthWeb.Router,
+    :phoenix_view => TwoFactorAuthWeb.TwoFactorAuthView,
+    :plug_session => %{
+      "_csrf_token" => "MXbH2CPKOEs5iMltrA38ZQ==",
+      "guardian_default_token" => "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0d29fZmFjdG9yX2F1dGgiLCJleHAiOjE1NTExMzE1NDMsImlhdCI6MTU0ODcxMjM0MywiaXNzIjoidHdvX2ZhY3Rvcl9hdXRoIiwianRpIjoiYmMyMzUyZDktODk1Yi00N2ZiLTkzMWItNWNlY2I2OTcwMjMzIiwibmJmIjoxNTQ4NzEyMzQyLCJzdWIiOiIxIiwidHlwIjoiYWNjZXNzIn0.5rFnDhFhB28LxksKqt_sc0ZfgYv-QbuTX5PLFKJkgi7J4NzxKt5N-PphQT2Z39uMWbp3V2p22Fz1Yz3pqisfWw",
+      "phoenix_flash" => %{
+        "info" => "A two-factor authentication code has been sent to your email!"
+      }
+    }
+  }
+}
+```
 
 Here we're putting on the secret sauce during the first step of authentication and then sending the user along to the next stop:
 
@@ -244,6 +269,24 @@ conn
 |> put_flash(:info, "A heckin' 2fa code has been sent to you! Isn't that cool?")
 |> put_status(302)
 |> redirect(to: two_factor_auth_path(conn, @new))
+```
+
+Take a look at this! Our `"user_secret"` is now nested comfortable in `:plug_session`:
+
+```elixir
+%Plug.Conn{
+  private: %{
+    :plug_session => %{
+      "_csrf_token" => "MXbH2CPKOEs5iMltrA38ZQ==",
+      "guardian_default_token" => "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0d29fZmFjdG9yX2F1dGgiLCJleHAiOjE1NTExMzE1NDMsImlhdCI6MTU0ODcxMjM0MywiaXNzIjoidHdvX2ZhY3Rvcl9hdXRoIiwianRpIjoiYmMyMzUyZDktODk1Yi00N2ZiLTkzMWItNWNlY2I2OTcwMjMzIiwibmJmIjoxNTQ4NzEyMzQyLCJzdWIiOiIxIiwidHlwIjoiYWNjZXNzIn0.5rFnDhFhB28LxksKqt_sc0ZfgYv-QbuTX5PLFKJkgi7J4NzxKt5N-PphQT2Z39uMWbp3V2p22Fz1Yz3pqisfWw",
+      "phoenix_flash" => %{
+        "info" => "A two-factor authentication code has been sent to your email!"
+      },
+      "user_secret" => %{"token" => "some_token", "user_id" => 1}
+    }
+  }
+}
+
 ```
 
 When get's redirected to our new path, that's when we'll implement `get_session/2` to fetch our secret and check to see if we can even let them in and if we can, authenticate their one time password.
@@ -266,162 +309,51 @@ end
 defp session_key(binary) when is_binary(binary), do: binary
 defp session_key(atom) when is_atom(atom), do: Atom.to_string(atom)
 ```
-So now we have all the ingredients, assuming that the user has access to their email, for two successful pieces of evidence to finally sign them in to the system.
+
+After we retrieve our `"user_secret"`, we want to drop it from the session. Our one time password can only be used... well once. But, for an added measure of security we want to make sure that token doesn't exist anymore. This is where `delete_session/2` comes in, which works like a specialized version of `Map.delete/2`, but for the `:private` stuff on our `conn`.
 
 ```elixir
+def delete_session(conn, key) when is_atom(key) or is_binary(key) do
+  put_session(conn, &Map.delete(&1, session_key(key)))
+end
 
-```
+defp put_session(conn, fun) do
+	private =
+		conn.private
+		|> Map.put(:plug_session, fun.(get_session(conn)))
+		|> Map.put_new(:plug_session_info, :write)
 
-
-```
-This storage is meant to be used by libraries and frameworks to avoid writing to the user storage (the :assigns field). It is recommended for libraries/frameworks to prefix the keys with the library name.
-```
-
-So is our `:user_secret` being dropped because it's not a library? Let's take a look at conn[:private] and try something different.
-
-```elixir
-%Plud.Conn{
-  private: %{
-    TwoFactorAuthWeb.Router => {[],
-    :phoenix_action => :new,
-    :phoenix_controller => TwoFactorAuthWeb.TwoFactorAuthController,
-    :phoenix_endpoint => TwoFactorAuthWeb.Endpoint,
-    :phoenix_flash => %{
-      "info" => "A two-factor authentication code has been sent to your email!"
-    },
-    :phoenix_format => "html",
-    :phoenix_layout => {TwoFactorAuthWeb.LayoutView, :app},
-    :phoenix_pipelines => [:browser],
-    :phoenix_router => TwoFactorAuthWeb.Router,
-    :phoenix_view => TwoFactorAuthWeb.TwoFactorAuthView,
-    :plug_session => %{
-      "_csrf_token" => "MXbH2CPKOEs5iMltrA38ZQ==",
-      "guardian_default_token" => "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0d29fZmFjdG9yX2F1dGgiLCJleHAiOjE1NTExMzE1NDMsImlhdCI6MTU0ODcxMjM0MywiaXNzIjoidHdvX2ZhY3Rvcl9hdXRoIiwianRpIjoiYmMyMzUyZDktODk1Yi00N2ZiLTkzMWItNWNlY2I2OTcwMjMzIiwibmJmIjoxNTQ4NzEyMzQyLCJzdWIiOiIxIiwidHlwIjoiYWNjZXNzIn0.5rFnDhFhB28LxksKqt_sc0ZfgYv-QbuTX5PLFKJkgi7J4NzxKt5N-PphQT2Z39uMWbp3V2p22Fz1Yz3pqisfWw",
-      "phoenix_flash" => %{
-        "info" => "A two-factor authentication code has been sent to your email!"
-      }
-  }
-}
-```
-
-## A plug for our Plug
-
-Notice the keys returned from looking at the `conn[:private]`, besides our router, are all dependencies for our Phoenix application. So let's try this again but nest our `:user_secret` map inside of an applicable place in `:private`.
-
-```elixir
-defmodule TwoFactorAuthWeb.Plugs.Auth do
-  use TwoFactorAuthWeb, :controller
-  import Plug.Conn
-
-  alias TwoFactorAuth.Accounts.User
-
-  def generate_one_time_pass() do
-    token =
-      :crypto.strong_rand_bytes(8)
-      |> Base.encode32()
-
-    one_time_pass = :pot.hotp(token, _number_of_trials = 1)
-
-    {token, one_time_pass}
-  end
-
-  def assign_secret_to_session(conn, token, user_id) do
-    # putting our secret inside of :plug_session makes sense?
-    updated_plug_session =
-      conn.private[:plug_session]
-      |> Map.put("user_secret", %{"token" => token, "user_id" => user_id})
-
-    conn
-    |> put_private(:plug_session, updated_plug_session)
-  end
-
-  def fetch_secret_from_session(conn) do
-    # fetch the secret from the plug session
-    # if the key doesn't exist just return nil
-    with {:ok, %{"token" => token, "user_id" => user_id}} <-
-           conn.private[:plug_session] |> Match.fetch("user_secret") do
-      {token, user_id}
-    else
-      _ ->
-        nil
-    end
-  end
-
-  # When you check the validity of an HMAC one time password, since it's trial-based,
-  # it returns the current number of trials on the password when it is valid. Otherwise
-  # it returns false. When we generated our password we only allowed for 1 trial, so
-  # anything over that will now count as invalid or false.
-  def valid_one_time_pass?(one_time_pass, token) do
-    case :pot.valid_hotp(one_time_pass, token, [{:last, 0}]) do
-      1 -> true
-      _ -> false
-    end
-  end
-
-  def invalidate_secret(conn) do
-    # when we're invalidating the secret we'll just drop the key
-    updated_plug_session =
-      conn.private[:plug_session]
-      |> Map.drop("user_secret")
-
-    conn
-    |> put_private(:plug_session, updated_plug_session)
-  end
+	%{conn | private: private}
 end
 ```
 
-There's a lot going on in this file, so let me try to explain my reasoning behind a couple of these functions. Notice `assign_secret_to_session/3`; we end up putting our `:user_secret` (now the stringified key `"user_secret"`) inside of `:plug_session`. Why? Well it seemed like the aforementioned _applicable_ place. Considering that we wanted to continue the private data on our connection's current session, I thought it best to stash the goods inside of there. So if we latch our `"user_secret"` onto `:plug_session`, `conn[:private]` keeps it there after the redirect.
-
-Another weird thing you might notice is that `try ... rescue ...` block in `fetch_secret_from_session/1`. Well this comes in to play in our `two_factor_auth_controller` on the new path. For reference here's that function again:
+So now we have all the ingredients, assuming that the user has access to their email, for two successful pieces of evidence to finally sign them in to the system. That's where the create path from the `TwoFactorAuthController` comes in:
 
 ```elixir
-### lib/two_factor_auth_web/controllers/two_factor_auth_controller.ex ###
+def create(conn, %{"one_time_pass" => one_time_pass}) do
+  # to verify the one_time_pass we need the token off of the conn, which lives in the :private map
+  # (specifically under :plug_session)
+  # we also need the user_id to know who we're signing in
+  %{"token" => token, "user_id" => user_id} = get_session(conn, "user_secret")
+  user = Accounts.get_user!(user_id)
 
-def new(conn, _) do
-  with {token, _user_id} <- Auth.fetch_secret_from_session(conn) do
-    conn
-    |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
-  else
-  _ ->
-    conn
-    |> put_flash(:error, "Page not found")
-    |> put_status(404)
-    |> redirect(to: session_path(conn, :new))
+  case Accounts.valid_one_time_pass?(one_time_pass, token) do
+    true ->
+      conn
+      |> delete_session("user_secret")
+      |> Guardian.Plug.sign_in(user)
+      |> put_flash(:info, "Login successful!")
+      |> put_status(302)
+      |> redirect(to: page_path(conn, :index))
+
+    false ->
+      conn
+      |> put_flash(:error, "The authentication code you entered was invalid!")
+      |> put_status(401)
+      |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
   end
 end
 ```
-
-So without catching the `MatchError`, our application would have failed when we tried to call `fetch_secret_from_session/1` on a conn that didn't have a token. Now if the the `"user_secret"` key doesn't exist our `with` fails and takes us to the `else` clause where we can give our user a 404.
-
-Another strange caveat 
-
-```
-private: %{
-    TwoFactorAuthWeb.Router => {[],
-    :phoenix_action => :new,
-    :phoenix_controller => TwoFactorAuthWeb.TwoFactorAuthController,
-    :phoenix_endpoint => TwoFactorAuthWeb.Endpoint,
-    :phoenix_flash => %{
-      "info" => "A two-factor authentication code has been sent to your email!"
-    },
-    :phoenix_format => "html",
-    :phoenix_layout => {TwoFactorAuthWeb.LayoutView, :app},
-    :phoenix_pipelines => [:browser],
-    :phoenix_router => TwoFactorAuthWeb.Router,
-    :phoenix_view => TwoFactorAuthWeb.TwoFactorAuthView,
-    :plug_session => %{
-      "_csrf_token" => "MXbH2CPKOEs5iMltrA38ZQ==",
-      "guardian_default_token" => "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0d29fZmFjdG9yX2F1dGgiLCJleHAiOjE1NTExMzE1NDMsImlhdCI6MTU0ODcxMjM0MywiaXNzIjoidHdvX2ZhY3Rvcl9hdXRoIiwianRpIjoiYmMyMzUyZDktODk1Yi00N2ZiLTkzMWItNWNlY2I2OTcwMjMzIiwibmJmIjoxNTQ4NzEyMzQyLCJzdWIiOiIxIiwidHlwIjoiYWNjZXNzIn0.5rFnDhFhB28LxksKqt_sc0ZfgYv-QbuTX5PLFKJkgi7J4NzxKt5N-PphQT2Z39uMWbp3V2p22Fz1Yz3pqisfWw",
-      "phoenix_flash" => %{
-        "info" => "A two-factor authentication code has been sent to your email!"
-      },
-      "user_secret" => %{"token" => "TBPUPSS55IC7C===", "user_id" => 1} # <- ding! ding! ding!
-    },
-    :plug_session_fetch => :done
-  }
-```
-
-And finally, after some weirdness, we have our secret token that we need to validate the user's one time password!
 
 ## The cherry on top
 
@@ -437,14 +369,14 @@ post("/sessions/new/two_factor_auth/resend_email", TwoFactorAuthController, :res
 ### lib/two_factor_auth_web/controllers/two_factor_auth_controller.ex ###
 
 def resend_email(conn, _) do
-  {_old_token, user_id} = Auth.fetch_secret_from_session(conn)
+  %{"token" => _old_token, "user_id" => user_id} = get_session(conn, "user_secret")
   user = Accounts.get_user!(user_id)
 
-  {new_token, one_time_pass} = Auth.generate_one_time_pass()
+  {new_token, one_time_pass} = Acconts.generate_one_time_pass()
   Mailer.deliver_2fa_email(user, one_time_pass)
 
   conn
-  |> Auth.assign_secret_to_session(token, user_id)
+  |> put_session("user_secret", %{"token" => new_token, "user_id" => user_id})
   |> put_flash(:info, "A new two-factor authentication code was sent to your email!")
   |> put_status(200)
   |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
