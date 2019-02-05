@@ -5,7 +5,6 @@ defmodule TwoFactorAuthWeb.SessionController do
   alias TwoFactorAuth.Guardian
   alias TwoFactorAuth.Accounts
   alias TwoFactorAuthWeb.Mailer
-  alias TwoFactorAuthWeb.Plugs.Auth
 
   def new(conn, _) do
     render(conn, "new.html")
@@ -15,11 +14,11 @@ defmodule TwoFactorAuthWeb.SessionController do
     with {:ok, user} <- Accounts.verify_login(session_params) do
       case user.has_2fa do
         true ->
-          {token, one_time_pass} = Auth.generate_one_time_pass()
+          {token, one_time_pass} = Accounts.generate_one_time_pass()
           Mailer.deliver_2fa_email(user, one_time_pass)
 
           conn
-          |> Auth.assign_secret_to_session(token, user.id)
+          |> put_session("user_secret", %{"token" => token, "user_id" => user.id})
           |> put_flash(:info, "A two-factor authentication code has been sent to your email!")
           |> put_status(302)
           |> redirect(to: two_factor_auth_path(conn, :new))
