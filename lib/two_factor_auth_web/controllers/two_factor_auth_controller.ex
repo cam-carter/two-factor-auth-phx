@@ -9,7 +9,6 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
   def new(conn, _) do
     # we want to see if our token is nil, and if it is we redirect them back to the new session page
     # the goal here is to have one continuous session through the flow of 2fa
-    # %{"token" => token, "user_id" => user_id}
 
     with %{"token" => token, "user_id" => user_id} <- get_session(conn, "user_secret") do
       conn
