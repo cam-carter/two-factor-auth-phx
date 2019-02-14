@@ -4,9 +4,9 @@ Multi-factor authentication relies on the user having two or more pieces of evid
 
 ### A Disclaimer
 
-Now I'm just going to assume that if you're reading this you've already got the first factor of two-factor authentication figured out on your own. If that's not the case you can take a dive into the source code of the [example application](https://github.com/cam-carter/two-factor-auth-phx) that already implements basic user authentication with [Guardian] and [comeonin].
+Now I'm just going to assume that if you're reading this you've already got the first factor of two-factor authentication figured out on your own. If that's not the case you can take a dive into the source code of the [example application](https://github.com/cam-carter/two-factor-auth-phx) that already implements basic user authentication with [Guardian](https://github.com/ueberauth/guardian) and [comeonin](https://github.com/riverrun/comeonin).
 
-Also I'm doing some pretty wacky stuff with this code, so if you figure out a better way of doing this (there's always a better way), then please feel free to email me your suggestions, insults, or compliments.
+And if you figure out a better way of doing this (there's always a better way), then please feel free to email me your suggestions, insults, or compliments.
 
 ### Oh and app dependencies
 
@@ -24,7 +24,7 @@ end
 
 ## HMAC one time password generation
 
-To generate this one time password, we will be using an Erlang library called [pot]. The function we'll use will generate an HOTP, a one time password based on HMAC (hash-based message authentication code).
+To generate this one time password, we will be using an Erlang library called [pot](https://github.com/yuce/pot). The function we will be using generates an HOTP, a one time password based on HMAC (hash-based message authentication code).
 
 ```elixir
 # the secret token we'll need to generate the hotp
@@ -37,7 +37,7 @@ token =
 one_time_pass = :pot.hotp(token, _number_of_trials = 1)
 ```
 
-This code is going to come in handy later, so we'll want to hold on to it. We're creating a token with the `:crypto` application which provides an API to cryptographic functions in Erlang. Then we're using that token to generate a one time password that can only be used... You, guessed it: once.
+This code is going to come in handy later, so we'll want to hold on to it. We're creating a token with the [`:crypto`](http://erlang.org/doc/search/?q=crypto&x=0&y=0) application which is a module that provides access to cryptographic functions in Erlang. Then we're using that token to generate a one time password that can only be used... You, guessed it: once.
 
 ## Add a flag to the User? Add a flag to the User.
 
@@ -75,11 +75,11 @@ Then we'll run our new, fancy migration.
 mix ecto.migrate
 ```
 
-And to great success we now have `:has_2fa` attached to our users! This flag is going to tell us which users to send a one time password to and which ones to just let slide through with only one piece of authentic evidence. (Note: two factor authentication won't protect anything if your password for both the system and your email are just `password`)
+And to great success we now have `:has_2fa` attached to our users! This flag is going to tell us which users to send a one time password to and which ones to just let slide through with only one piece of authentic evidence. (Note: two factor authentication won't protect anything if your passwords for both the system and your email are just `password`)
 
 ## We're gonna need some new routes
 
-We need a place to go to render our form for 2fa and when we're there we need a way for our user to send their one time password to the controller for examination and verification.
+We need a place to go to render our form for 2fa, and when we're there, we need a way for our user to send their one time password to the controller for examination and verification.
 
 ```elixir
 ### lib/two_factor_auth_web/router.ex ###
@@ -149,10 +149,7 @@ defmodule TwoFactorAuthWeb.SessionController do
 end
 ```
 
-Here we verify the the email and password passed in through `session_params` and return `{:ok, user}`. If the user has enabled two-factor auth on their account, we will generate them a one time password and email it to them. We then use `put_session/3` to store the `user_secret` on `%Plug.Conn{private: :plug_session}`.
-
-`:plug_session` is the session storage for the `conn` that gets encrypted and sent to thend password passed in through `session_params` and return `{:ok, user}`. If the user has enabled two-factor auth on their account, we will generate them a one time password and email it to them. We then use `put_session/3` to store the `user_secret` on `%Plug.Conn{private: :plug_session}`. We need both t
-user as a cookie. We really don't want this token getting into the wrong hands, because we'll use it later on down the road to validate the one time password.
+Here we verify the the email and password passed in through `session_params` and return `{:ok, user}`. If the user has enabled two-factor auth on their account, we will generate them a one time password and email it to them. The user will fail the second factor of the authentication process if they don't have access to their email or this one time password.
 
 ```elixir
 defmodule TwoFactorAuthWeb.TwoFactorAuthController do
@@ -164,10 +161,12 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
 
   def new(conn, _) do
     # we want to see if our token is empty, and if it is we redirect them back to the new session page
-    # the goal here is to have one continuous session through the flow of 2fa
+    # the goal here is to make sure we have the same conn that went through the session controller
     with %{} <- Auth.fetch_secret_from_session(conn) do
       conn
-      |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
+      |> render("two_factor_auth.html", action: tw        # just in case?
+191
+o_factor_auth_path(conn, :create))
     else
     _ ->
       conn
@@ -187,8 +186,7 @@ defmodule TwoFactorAuthWeb.TwoFactorAuthController do
       true ->
         conn
         # our one time password can only be used... once
-        # but we wanna go that extra mile and also invalidate drop user_secret
-        # just in case?
+        # but we wanna go that extra mile and also invalidate it... just in case
         |> delete_session("user_secret")
         |> Guardian.Plug.sign_in(user)
         |> put_flash(:info, "Login successful!")
@@ -207,7 +205,7 @@ end
 
 ## The legend of Plug.Conn
 
-There's a couple challenges when it comes to dealing with the second factor of our authentication workflow. We need to be able to assure that there is one continuous session throughout the entire process, meaning that we can't take any requests from a user that hasn't first logged in with their username and password. We also need to be sure no sensitive data, i.e. our secret token, is being leaked to the user.
+There's a couple of challenges when it comes to dealing with the second factor of our authentication workflow. We need to be able to assure that there is one continuous session throughout the entire process, meaning that we can't take any requests from a user that hasn't first logged in with their username and password. We also need to be sure no sensitive data, i.e. our secret token, is being leaked to the user.
 
 That's where `:plug_session` comes in. This is the session store in `conn[:private]` that get's encrypted when it's sent to the client and is stored by your browser as a cookie. We'll need to use `put_session/3` and `get_session/2` from `Plug.Conn` to assign and fetch our `"user_secret"` to and from the session.
 
@@ -232,7 +230,7 @@ end
 
 `conn[:private]` is meant to be used by libraries and frameworks, such as `Plug.Conn`, to avoid writing to the user storage (the `:assigns` field).
 
-So inside of our `conn` lives a special `:private` map that keeps our deep, dark secrets about the session from the user instead of leaking this information through `conn[:assigns]`. It's meant to be used by libraries, such as `Plug.Conn`, to avoid writing to `:assigns`. Take a gander:
+So inside of our `conn` lives a special `:private` map that keeps our deep, dark secrets away from the user instead of leaking this information through `conn[:assigns]`. It's meant to be used by libraries, such as `Plug.Conn`, to avoid writing to `:assigns`. Take a gander:
 
 ```elixir
 %Plug.Conn{
@@ -382,3 +380,9 @@ def resend_email(conn, _) do
   |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
 end
 ```
+
+## So long
+
+As more and more services are moving away from email-based two-factor auth, is this solution useful? Sure it is! We (I) learned a lot by doing this. Mainly, I learned to read all the way through the docs when reading about a particular module \*cough\* `Plug.Conn` \*cough\*. Am I going to remember this lesson learned? Probably not. But that's besides the point. The information I've presented to you, the wonderful reader, could come in handy with loads of other stuff.
+
+Next time you're trying to pass weird and not-so-secure things from controller to controller, think back on this and ask yourself: is there a better way? Probably.
