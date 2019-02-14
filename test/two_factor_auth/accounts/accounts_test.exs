@@ -60,5 +60,10 @@ defmodule TwoFactorAuth.AccountsTest do
 
       assert %User{} = user
     end
+
+    test "generating a valid one time password" do
+      {token, one_time_pass} = Accounts.generate_one_time_pass()
+      assert Accounts.valid_one_time_pass?(one_time_pass, token)
+    end
   end
 end

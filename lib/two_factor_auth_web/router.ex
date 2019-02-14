@@ -13,15 +13,28 @@ defmodule TwoFactorAuthWeb.Router do
     plug(:accepts, ["json"])
   end
 
+  pipeline :authenticated do
+    plug(TwoFactorAuth.Guardian.AuthPipeline)
+  end
+
   scope "/", TwoFactorAuthWeb do
     # Use the default browser stack
     pipe_through(:browser)
 
-    get("/", SessionController, :new)
     get("/sessions/new", SessionController, :new)
+    get("/", SessionController, :new)
     post("/sessions", SessionController, :create)
+    get("/sessions/new/two_factor_auth", TwoFactorAuthController, :new)
+    post("/sessions/new/two_factor_auth", TwoFactorAuthController, :create)
+    post("/sessions/new/two_factor_auth/resend_email", TwoFactorAuthController, :resend_email)
+
+    pipe_through(:authenticated)
 
     get("/index", PageController, :index)
+  end
+
+  if Mix.env() == :dev do
+    forward("/sent_emails", Bamboo.SentEmailViewerPlug)
   end
 
   # Other scopes may use custom stacks.

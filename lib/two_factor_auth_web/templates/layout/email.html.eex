@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Two Factor Auth</title>
+  </head>
+
+  <body>
+    <%= render @view_module, @view_template, assigns %>
+  </body>
+</html>

@@ -55,4 +55,7 @@ config :two_factor_auth, TwoFactorAuth.Repo,
   password: "postgres",
   database: "two_factor_auth_dev",
   hostname: "localhost",
-  pool_size: 10
+	pool_size: 10
+
+config :two_factor_auth, TwoFactorAuthWeb.Mailer,
+	adapter: Bamboo.LocalAdapter

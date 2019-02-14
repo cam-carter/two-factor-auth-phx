@@ -1,0 +1,9 @@
+<%= form_for @conn, two_factor_auth_path(@conn, :create), fn f -> %>
+  <label>
+    Code: <%= text_input f, :one_time_pass, class: "qa-one_time_pass" %>
+  </label>
+
+  <%= submit "Submit", class: "qa-submit" %>
+<% end %>
+
+<%= link "Resend two-factor authetication code", to: two_factor_auth_path(@conn, :resend_email), method: :post, class: "qa-resend-email" %>

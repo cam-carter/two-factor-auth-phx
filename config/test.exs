@@ -20,4 +20,7 @@ config :two_factor_auth, TwoFactorAuth.Repo,
   pool: Ecto.Adapters.SQL.Sandbox
 
 config :hound,
-  driver: "chrome_driver"
+	driver: "chrome_driver"
+
+config :two_factor_auth,
+	TwoFactorAuthWeb.Mailer, adapter: Bamboo.TestAdapter

@@ -1,183 +1,388 @@
-# TwoFactorAuth
+# Two-Factor Authentication in Elixir and Phoenix
 
-`mix phx.new two_factor_auth`
+Multi-factor authentication relies on the user having two or more pieces of evidence (or factors) in order to gain access into a system. In this example we will implement a two-factor authentication system that requires the user to present two forms of evidence: what the user and only that user knows, their password, and a one time password sent to what only the user has access to, their email.
 
-deps:
+### A Disclaimer
 
-```elixir
-[
-  {:bamboo, "~> 1.1"},
-  {:comeonin, "~> 4.0"},
-  {:ex_machina, "~>2.2"},
-  {:guardian, "~> 1.1"},
-  {:hound, "~> 1.0", only: :test}
-  {:pot, "~> 0.9.6"}
-]
-```
+Now I'm just going to assume that if you're reading this you've already got the first factor of two-factor authentication figured out on your own. If that's not the case you can take a dive into the source code of the [example application](https://github.com/cam-carter/two-factor-auth-phx) that already implements basic user authentication with [Guardian](https://github.com/ueberauth/guardian) and [comeonin](https://github.com/riverrun/comeonin).
 
-To start your Phoenix server:
+And if you figure out a better way of doing this (there's always a better way), then please feel free to email me your suggestions, insults, or compliments.
 
-  * Install dependencies with `mix deps.get`
-  * Create and migrate your database with `mix ecto.create && mix ecto.migrate`
-  * Install Node.js dependencies with `cd assets && npm install`
-  * Start Phoenix endpoint with `mix phx.server`
+### Oh and app dependencies
 
-Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
+Here's the list of dependencies I'm using. You can just throw this in your `mix.exs` file.
 
-Ready to run in production? Please [check our deployment guides](http://www.phoenixframework.org/docs/deployment).
-
-## Learn more
-
-  * Official website: http://www.phoenixframework.org/
-  * Guides: http://phoenixframework.org/docs/overview
-  * Docs: https://hexdocs.pm/phoenix
-  * Mailing list: http://groups.google.com/group/phoenix-talk
-  * Source: https://github.com/phoenixframework/phoenix
-
-Two-factor authentication implies two layers of security, so we're going to walk hand-in-hand through both. The weird part starts at the second layer, so if you want to skip ahead feel free. But, if you're interested in seeing my way of basic user authentication, then you can come along for the ride.
-
-We'll start with some tests that will help us map out the design of our login workflow. For feature (or integration testing, call it what you want) we'll need [Hound](), a pretty handy testing framework that uses chromedriver to uh... drive chrome through your app. We'll also be using [ExMachina]() for test factories.
-
-Add this stuff to you `mix.exs` file under:
 ```elixir
 defp deps do
   [
-    {:ex_machina, "~> 2.2", only: test},
-    {:hound, "~> 1.0", only: test}
+    {:bamboo, "~> 1.0"},
+    {:guardian, "~> 1.1"},
+    {:pot, "~> 0.9.6"}
   ]
 end
 ```
 
-Before we being writing feature tests using both Hound and ExMachina we have to create our own test case. We will call it `feature_case.ex`. The contents of this module will include the modules we need for testing and it will allout us to actually talk to our database in the event of tests running faster than those queries. If we don't include this, a particular test may fail but there may be a process that still exists trying to access the database.
+## HMAC one time password generation
+
+To generate this one time password, we will be using an Erlang library called [pot](https://github.com/yuce/pot). The function we will be using generates an HOTP, a one time password based on HMAC (hash-based message authentication code).
 
 ```elixir
-defmodule TwoFactorAuth.FeatureCase do
-  use ExUnit.CaseTemplate
+# the secret token we'll need to generate the hotp
+# this will need to stay hidden from the user
+token =
+  :crypto.strong_rand_bytes
+  |> Base.encode32()
 
-  using do
-    quote do
-      import TwoFactorAuth.Factory
-      use Hound.Helpers
-      use TwoFactorAuth.Page
+# the one_time_pass we'll send to our user's email
+one_time_pass = :pot.hotp(token, _number_of_trials = 1)
+```
+
+This code is going to come in handy later, so we'll want to hold on to it. We're creating a token with the [`:crypto`](http://erlang.org/doc/search/?q=crypto&x=0&y=0) application which is a module that provides access to cryptographic functions in Erlang. Then we're using that token to generate a one time password that can only be used... You, guessed it: once.
+
+## Add a flag to the User? Add a flag to the User.
+
+To get things poppin' off we're going to want to add a boolean flag to our `User` schema module and `:users` tabel. We can do that by generating a new Ecto migration.
+
+```
+mix ecto.gen.migration add_has_2fa_to_users
+```
+
+Then we'll add the stuff to the other stuff...
+
+```elixir
+### whatevertimestamp_add_has_2fa_to_users.exs ###
+
+def change do
+  alter table(:users) do
+    add(:has_2fa, :boolean, default: true)
+  end
+end
+
+
+### user.ex ###
+
+schema "users" do
+  field(:email, :string)
+  field(:has_2fa, :boolean, default: false) # <- the new stuff
+  field(:password_hash, :string)
+  field(:password, :string, virtual: true)
+end
+```
+
+Then we'll run our new, fancy migration.
+
+```
+mix ecto.migrate
+```
+
+And to great success we now have `:has_2fa` attached to our users! This flag is going to tell us which users to send a one time password to and which ones to just let slide through with only one piece of authentic evidence. (Note: two factor authentication won't protect anything if your passwords for both the system and your email are just `password`)
+
+## We're gonna need some new routes
+
+We need a place to go to render our form for 2fa, and when we're there, we need a way for our user to send their one time password to the controller for examination and verification.
+
+```elixir
+### lib/two_factor_auth_web/router.ex ###
+
+get("/sessions/new/two_factor_auth", TwoFactorAuthController, :new)
+post("/sessions/new/two_factor_auth", TwoFactorAuthController, :create)
+```
+
+And the corresponding form:
+
+```elixir
+### lib/two_factor_auth_web/templates/two_factor_auth/two_factor_auth.html.eex ###
+
+<%= form_for @conn, two_factor_auth_path(@conn, :create), fn f -> %>
+  <label>
+    Code: <%= text_input f, :one_time_pass, class: "qa-one_time_pass" %>
+  </label>
+
+  <%= submit "Submit", class: "qa-submit" %>
+<% end %>
+```
+
+## And now the all-powerfull controllers
+
+Before we can get to the meat and potatoes of two-factor authentication, we need to take a gander at our session controller and, using that shiny, new boolean on our users, make sure we're sending people to their appropriate destinations.
+
+```elixir
+defmodule TwoFactorAuthWeb.SessionController do
+  use TwoFactorAuthWeb, :controller
+  import Plug.Conn
+
+  alias TwoFactorAuth.Guardian
+  alias TwoFactorAuth.Accounts
+  alias TwoFactorAuthWeb.Mailer
+
+  def new(conn, _), do: render(conn, "new.html")
+
+  def create(conn, session_params) do
+    # You could use a nested case here, but withs are cool, too
+    with {:ok, user} <- Accounts.verify_login(session_params) do
+      case user.has_2fa do
+        true ->
+          # remember that code at the beginning... this is where it went
+          {token, one_time_pass} = Accounts.generate_one_time_pass(user)
+          Mailer.deliver_2fa_email(user, one_time_pass)
+
+          conn
+          |> put_session("user_secret", %{"token" => token, "user_id" => user_id})
+          |> put_flash(:info, "A heckin' 2fa code has been sent to you! Isn't that cool?")
+          |> put_status(302)
+          |> redirect(to: two_factor_auth_path(conn, :new))
+
+        false ->
+          conn
+          |> Guardian.Plug.sign_in(user)
+          |> put_flash(:info, "Login successful! But you should enable two-factor auth ngl")
+          |> put_status(302)
+          |> redirect(to: page_path(conn, :index))
+      end
+    else
+      {:error, _} ->
+        conn
+        |> put_flash(:error, "You entered an invalid password or email!")
+        |> put_status(401)
+        |> render("new.html")
+  end
+end
+```
+
+Here we verify the the email and password passed in through `session_params` and return `{:ok, user}`. If the user has enabled two-factor auth on their account, we will generate them a one time password and email it to them. The user will fail the second factor of the authentication process if they don't have access to their email or this one time password.
+
+```elixir
+defmodule TwoFactorAuthWeb.TwoFactorAuthController do
+  use TwoFactorAuthWeb, :controller
+  import Plug.Conn
+
+  alias TwoFactorAuth.Guardian
+  alias TwoFactorAuth.Accounts
+
+  def new(conn, _) do
+    # we want to see if our token is empty, and if it is we redirect them back to the new session page
+    # the goal here is to make sure we have the same conn that went through the session controller
+    with %{} <- Auth.fetch_secret_from_session(conn) do
+      conn
+      |> render("two_factor_auth.html", action: tw        # just in case?
+191
+o_factor_auth_path(conn, :create))
+    else
+    _ ->
+      conn
+      |> put_flash(:error, "Page not found")
+      |> put_status(404)
+      |> redirect(to: session_path(conn, :new))
     end
   end
 
-  setup tags do
-    :ok = Ecto.Adapters.SQL.Sandbox.checkout(TwoFactorAuth.Repo)
+  def create(conn, %{"one_time_pass" => one_time_pass}) do
+    # to verify the one_time_pass that comes in through the form we need the secret token off the conn
+    # we also need the user_id to know who we're building the session for
+    %{"token" => token, "user_id" => user_id} = get_session(conn)
+    user = Accounts.get_user!(user_id)
 
-    Ecto.Adapaters.SQL.Sandbox.mode(TwoFactorAuth.Repo, {:shared, self()})
+    case Accounts.valid_one_time_pass?(one_time_pass, token) do
+      true ->
+        conn
+        # our one time password can only be used... once
+        # but we wanna go that extra mile and also invalidate it... just in case
+        |> delete_session("user_secret")
+        |> Guardian.Plug.sign_in(user)
+        |> put_flash(:info, "Login successful!")
+        |> put_status(302)
+        |> redirect(to: page_path(conn, :index))
 
-    Hound.start_session(
-      additional_capabilities: %{
-        chromeOptions: %{
-          "args" => ["--window-size=1920, 1080"] |> put_headless(tags) |> put_user_agent(tags)
-        }
+      false ->
+        conn
+        |> put_flash(:error, "The authentication code you entered was invalid!")
+        |> put_status(401)
+        |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
+    end
+  end
+end
+```
+
+## The legend of Plug.Conn
+
+There's a couple of challenges when it comes to dealing with the second factor of our authentication workflow. We need to be able to assure that there is one continuous session throughout the entire process, meaning that we can't take any requests from a user that hasn't first logged in with their username and password. We also need to be sure no sensitive data, i.e. our secret token, is being leaked to the user.
+
+That's where `:plug_session` comes in. This is the session store in `conn[:private]` that get's encrypted when it's sent to the client and is stored by your browser as a cookie. We'll need to use `put_session/3` and `get_session/2` from `Plug.Conn` to assign and fetch our `"user_secret"` to and from the session.
+
+```elixir
+### from Plug.Conn (conn.ex) ###
+
+def put_session(conn, key, value) when is_atom(key) or is_binary(key) do
+	put_session(conn, &Map.put(&1, session_key(key), value))
+end
+
+defp put_session(conn, fun) do
+	private =
+		conn.private
+		|> Map.put(:plug_session, fun.(get_session(conn)))
+		|> Map.put_new(:plug_session_info, :write)
+
+	%{conn | private: private}
+end
+```
+
+`put_session` takes your connection, the new key, and the value you want to assign to that key and puts them in `:plug_session` which lives in the private store of you connection.
+
+`conn[:private]` is meant to be used by libraries and frameworks, such as `Plug.Conn`, to avoid writing to the user storage (the `:assigns` field).
+
+So inside of our `conn` lives a special `:private` map that keeps our deep, dark secrets away from the user instead of leaking this information through `conn[:assigns]`. It's meant to be used by libraries, such as `Plug.Conn`, to avoid writing to `:assigns`. Take a gander:
+
+```elixir
+%Plug.Conn{
+  private: %{
+    :phoenix_action => :new,
+    :phoenix_controller => TwoFactorAuthWeb.TwoFactorAuthController,
+    :phoenix_endpoint => TwoFactorAuthWeb.Endpoint,
+    :phoenix_flash => %{
+      "info" => "A two-factor authentication code has been sent to your email!"
+    },
+    :phoenix_format => "html",
+    :phoenix_layout => {TwoFactorAuthWeb.LayoutView, :app},
+    :phoenix_pipelines => [:browser],
+    :phoenix_router => TwoFactorAuthWeb.Router,
+    :phoenix_view => TwoFactorAuthWeb.TwoFactorAuthView,
+    :plug_session => %{
+      "_csrf_token" => "MXbH2CPKOEs5iMltrA38ZQ==",
+      "guardian_default_token" => "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0d29fZmFjdG9yX2F1dGgiLCJleHAiOjE1NTExMzE1NDMsImlhdCI6MTU0ODcxMjM0MywiaXNzIjoidHdvX2ZhY3Rvcl9hdXRoIiwianRpIjoiYmMyMzUyZDktODk1Yi00N2ZiLTkzMWItNWNlY2I2OTcwMjMzIiwibmJmIjoxNTQ4NzEyMzQyLCJzdWIiOiIxIiwidHlwIjoiYWNjZXNzIn0.5rFnDhFhB28LxksKqt_sc0ZfgYv-QbuTX5PLFKJkgi7J4NzxKt5N-PphQT2Z39uMWbp3V2p22Fz1Yz3pqisfWw",
+      "phoenix_flash" => %{
+        "info" => "A two-factor authentication code has been sent to your email!"
       }
-    )
-
-    {:ok, %{}}
-  end
-
-  defp put_headless(args, %{headless: false}), do: args
-  defp put_headless(args, _), do: args ++ ["--headless", "--disable-gpu"]
-
-  defp put_user_agent(args, %{async: false}), do: args
-
-  defp put_user_agent(args, _) do
-    metadata = Phoenix.Ecto.SQL.Sandbox.metadata_for(TwoFactorAuth.Repo, self())
-    user_agent = Hound.Browser.user_agent(:chrome) |> Hound.Metadata.append(metadata)
-    ["--user-agent=#{user_agent}" | args]
-  end
-end
+    }
+  }
+}
 ```
 
-Okay! We're ready to run our test.
-
-```
-mix test --trace  test/two_factor_auth_web/features/session/new_test.exs
-Compiling 1 file (.ex)
-
-== Compilation error in file test/support/factory.ex ==
-** (CompileError) test/support/factory.ex:10: TwoFactorAuth.Accounts.User.__struct__/1 is undefined, cannot expand struct TwoFactorAuth.Accounts.User
-    (elixir) expanding macro: Kernel.|>/2
-        test/support/factory.ex:14: TwoFactorAuth.Factory.user_factory/0
-```
-
-Oh right. We actually need a User struct in order for our factory to insert it in the database. Which means we also need a `:users` table in our database. Our User schema module is going to live in our Accounts context. For the sake of simplicity we'll use the Phoenix generator for a new context.
-
-```
-mix phx.gen.context Accounts User users email:string password_hash:string
-```
-
-And like magic you have an Accounts context, a User module, and even a handy-dandy Ecto migration. However, we're going to want to make a few changes before we put a nail in this user's coffin. We'll first change up the user's changeset to downcase (or upcase) their email address, so we don't get into any trouble when we try and validate their session. Also we're gonna wanna hash their password for _security reasons_. For the latter we're gonna throw another depency onto the pil.
+Here we're putting on the secret sauce during the first step of authentication and then sending the user along to the next stop:
 
 ```elixir
-defp deps do
-	[
-		{:comeonin, "~> 4.0"},
-    {:bcrypt_elixir, "~> 1.1.1"}
-	]
-end
+### lib/two_factor_auth_web/controllers/session_controller.ex ###
+
+conn
+|> put_session("user_secret", %{"token" => token, "user_id" => user_id})
+|> put_flash(:info, "A heckin' 2fa code has been sent to you! Isn't that cool?")
+|> put_status(302)
+|> redirect(to: two_factor_auth_path(conn, @new))
 ```
 
-And here are the changes to the generated User schema module:
+Take a look at this! Our `"user_secret"` is now nested comfortable in `:plug_session`:
 
 ```elixir
-defmodule TwoFactorAuth.Accounts.User do
-  use Ecto.Schema
-  import Ecto.Changeset
+%Plug.Conn{
+  private: %{
+    :plug_session => %{
+      "_csrf_token" => "MXbH2CPKOEs5iMltrA38ZQ==",
+      "guardian_default_token" => "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ0d29fZmFjdG9yX2F1dGgiLCJleHAiOjE1NTExMzE1NDMsImlhdCI6MTU0ODcxMjM0MywiaXNzIjoidHdvX2ZhY3Rvcl9hdXRoIiwianRpIjoiYmMyMzUyZDktODk1Yi00N2ZiLTkzMWItNWNlY2I2OTcwMjMzIiwibmJmIjoxNTQ4NzEyMzQyLCJzdWIiOiIxIiwidHlwIjoiYWNjZXNzIn0.5rFnDhFhB28LxksKqt_sc0ZfgYv-QbuTX5PLFKJkgi7J4NzxKt5N-PphQT2Z39uMWbp3V2p22Fz1Yz3pqisfWw",
+      "phoenix_flash" => %{
+        "info" => "A two-factor authentication code has been sent to your email!"
+      },
+      "user_secret" => %{"token" => "some_token", "user_id" => 1}
+    }
+  }
+}
 
-  schema "users" do
-    field(:email, :string)
-    field(:password_hash, :string)
-    field(:password, :string, virtual: true)
-
-    timestamps()
-  end
-
-  @doc false
-  def changeset(user, attrs) do
-    user
-    |> cast(attrs, [:email, :password])
-    |> validate_required([:email, :password])
-    |> downcase_email()
-    |> unique_constraint(:email)
-    |> put_pass_hash()
-  end
-
-  defp downcase_email(%Ecto.Changeset{valid?: true, changes: %{password: password}} = changeset) do
-    changeset
-    |> change(%{email: String.downcase(email)})
-  end
-
-  defp downcase_email(changeset), do: changeset
-
-  defp put_pass_hash(%Ecto.Changeset{valid?: true, changes: %{password: passowrd}} = changeset) do
-    changeset
-    |> change(Comeonin.Bcrypt.add_hash(password))
-  end
-
-  defp put_pass_hash(changeset), do: changeset
-end
 ```
 
-Aaannd the changes to the migration:
+When get's redirected to our new path, that's when we'll implement `get_session/2` to fetch our secret and check to see if we can even let them in and if we can, authenticate their one time password.
 
 ```elixir
-defmodule TwoFactorAuth.Repo.Migrations.CreateUsers do
-  use Ecto.Migration
+### from Plug.Conn (conn.ex) ###
 
-  def change do
-    create table(:users) do
-      add(:email, :string)
-      add(:password_hash, :string)
+def get_session(conn, key) when is_atom(key) or is_binary(key) do
+  conn |> get_session |> Map.get(session_key(key))
+end
 
-      timestamps()
-    end
+defp get_session(%Conn{private: private}) do
+  if session = Map.get(private, :plug_session) do
+    session
+  else
+    raise ArgumentError, "session not fetched, call fetch_session/2"
+  end
+end
 
-    create(unique_index(:users, [:email]))
+defp session_key(binary) when is_binary(binary), do: binary
+defp session_key(atom) when is_atom(atom), do: Atom.to_string(atom)
+```
+
+After we retrieve our `"user_secret"`, we want to drop it from the session. Our one time password can only be used... well once. But, for an added measure of security we want to make sure that token doesn't exist anymore. This is where `delete_session/2` comes in, which works like a specialized version of `Map.delete/2`, but for the `:private` stuff on our `conn`.
+
+```elixir
+def delete_session(conn, key) when is_atom(key) or is_binary(key) do
+  put_session(conn, &Map.delete(&1, session_key(key)))
+end
+
+defp put_session(conn, fun) do
+	private =
+		conn.private
+		|> Map.put(:plug_session, fun.(get_session(conn)))
+		|> Map.put_new(:plug_session_info, :write)
+
+	%{conn | private: private}
+end
+```
+
+So now we have all the ingredients, assuming that the user has access to their email, for two successful pieces of evidence to finally sign them in to the system. That's where the create path from the `TwoFactorAuthController` comes in:
+
+```elixir
+def create(conn, %{"one_time_pass" => one_time_pass}) do
+  # to verify the one_time_pass we need the token off of the conn, which lives in the :private map
+  # (specifically under :plug_session)
+  # we also need the user_id to know who we're signing in
+  %{"token" => token, "user_id" => user_id} = get_session(conn, "user_secret")
+  user = Accounts.get_user!(user_id)
+
+  case Accounts.valid_one_time_pass?(one_time_pass, token) do
+    true ->
+      conn
+      |> delete_session("user_secret")
+      |> Guardian.Plug.sign_in(user)
+      |> put_flash(:info, "Login successful!")
+      |> put_status(302)
+      |> redirect(to: page_path(conn, :index))
+
+    false ->
+      conn
+      |> put_flash(:error, "The authentication code you entered was invalid!")
+      |> put_status(401)
+      |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
   end
 end
 ```
 
-Now that we've migrated that stuff let's run that test again. Alas, we need our page helper functions to run this test.
+## The cherry on top
+
+So what if our user doesn't recieve the email? Maybe some shark was nibbling on some transatlantic communications cable and something went wrong? Well, we could give our user the option to resend their email. We'd just need a new route and some extra goodies in the controller to generate another one time password and token.
+
+```elixir
+### liv/two_factor_auth_web/router.ex ###
+
+post("/sessions/new/two_factor_auth/resend_email", TwoFactorAuthController, :resend_email)
+```
+
+```elixir
+### lib/two_factor_auth_web/controllers/two_factor_auth_controller.ex ###
+
+def resend_email(conn, _) do
+  %{"token" => _old_token, "user_id" => user_id} = get_session(conn, "user_secret")
+  user = Accounts.get_user!(user_id)
+
+  {new_token, one_time_pass} = Acconts.generate_one_time_pass()
+  Mailer.deliver_2fa_email(user, one_time_pass)
+
+  conn
+  |> put_session("user_secret", %{"token" => new_token, "user_id" => user_id})
+  |> put_flash(:info, "A new two-factor authentication code was sent to your email!")
+  |> put_status(200)
+  |> render("two_factor_auth.html", action: two_factor_auth_path(conn, :create))
+end
+```
+
+## So long
+
+As more and more services are moving away from email-based two-factor auth, is this solution useful? Sure it is! We (I) learned a lot by doing this. Mainly, I learned to read all the way through the docs when reading about a particular module \*cough\* `Plug.Conn` \*cough\*. Am I going to remember this lesson learned? Probably not. But that's besides the point. The information I've presented to you, the wonderful reader, could come in handy with loads of other stuff.
+
+Next time you're trying to pass weird and not-so-secure things from controller to controller, think back on this and ask yourself: is there a better way? Probably.
