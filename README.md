@@ -8,7 +8,7 @@ Now I'm just going to assume that if you're reading this you've already got the 
 
 And if you figure out a better way of doing this (there's always a better way), then please feel free to email me your suggestions, insults, or compliments.
 
-### Oh and app dependencies
+### Oh, and app dependencies
 
 Here's the list of dependencies I'm using. You can just throw this in your `mix.exs` file.
 
